@@ -25,7 +25,7 @@ totalSupply: public(uint256)
 crv_registry: public(address)
 main_pool: public(address)
 main_deposit: public(address)
-is_a: public(bool)
+is_a_pool: public(bool)
 main_lp_token: public(address)
 main_pool_coin_count: public(uint256)
 validators: public(HashMap[address, bool])
@@ -67,7 +67,7 @@ interface WrappedEth:
     def withdraw(amount: uint256): nonpayable
 
 @external
-def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_deposit: address):
+def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_deposit: address, _is_a_pool: bool):
     self.name = _name
     self.symbol = _symbol
     self.admin = msg.sender
@@ -85,6 +85,7 @@ def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_
     _main_lp_token: address = CrvRegistry(0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d7f5).get_lp_token(_main_pool)
     assert _main_lp_token != ZERO_ADDRESS, "Wrong Pool"
     self.main_lp_token = _main_lp_token
+    self.is_a_pool = _is_a_pool
 
 @internal
 def _mint(_to: address, _value: uint256):
@@ -188,29 +189,11 @@ def decreaseAllowance(_spender: address, _value: uint256) -> bool:
     log Approval(msg.sender, _spender, allowance)
     return True
 
-@external
-@payable
-@nonreentrant("lock")
-def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
-    self.safe_transfer_from(token_address, msg.sender, self, amount)
-    in_token: address = token_address
-    in_amount: uint256 = amount
-    _main_pool: address = self.main_pool
-    i: int128 = 0
-    j: int128 = 0
-    is_underlying: bool = False
-    _crv_registry: address = self.crv_registry
-    if swap_route.mid_pool != ZERO_ADDRESS:
-        in_token = swap_route.mid_token
-        i, j, is_underlying = CrvRegistry(_crv_registry).get_coin_indices(swap_route.mid_pool, token_address, swap_route.mid_token)
-        if token_address == VETH:
-            in_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount, value=amount)
-        else:
-            self.safe_approve(token_address, swap_route.mid_token, amount)
-            in_amount = CrvPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount)
-        assert in_amount >= swap_route.min_amount
+@internal
+def _deposit(_crv_registry: address, main_pool: address, in_token: address, in_amount: uint256):
+    _main_pool: address = main_pool
     coins: address[MAX_COINS] = CrvRegistry(_crv_registry).get_underlying_coins(_main_pool)
-    i = -1
+    i: int128 = -1
     for k in range(MAX_COINS):
         if in_token == coins[k]:
             i = k
@@ -237,7 +220,7 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
         payload = concat(bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0)
 
     m_id: Bytes[4] = empty(Bytes[4])
-    if self.is_a:
+    if self.is_a_pool:
         true_bytes32: bytes32 = convert(True, bytes32)
         if _main_pool_coin_count == 2:
             m_id = method_id("add_liquidity(uint256[2],uint256,bool)")
@@ -283,8 +266,6 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
             m_id = method_id("add_liquidity(uint256[8],uint256)")
             payload = slice(payload, 0, 288)
 
-    _main_lp_token: address = self.main_lp_token
-    old_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
     _main_deposit: address = self.main_deposit
     if _main_deposit != ZERO_ADDRESS:
         _main_pool = _main_deposit
@@ -298,7 +279,7 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
             value=in_amount
         )
     else:
-        self.safe_approve(in_token, _main_pool, amount)
+        self.safe_approve(in_token, _main_pool, in_amount)
         raw_call(
             _main_pool,
             concat(
@@ -306,6 +287,29 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
                 payload
             )
         )
+
+@external
+@payable
+@nonreentrant("lock")
+def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
+    self.safe_transfer_from(token_address, msg.sender, self, amount)
+    in_token: address = token_address
+    in_amount: uint256 = amount
+    i: int128 = 0
+    j: int128 = 0
+    is_underlying: bool = False
+    _crv_registry: address = self.crv_registry
+    if swap_route.mid_pool != ZERO_ADDRESS:
+        in_token = swap_route.mid_token
+        i, j, is_underlying = CrvRegistry(_crv_registry).get_coin_indices(swap_route.mid_pool, token_address, swap_route.mid_token)
+        if token_address == VETH:
+            in_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount, value=amount)
+        else:
+            self.safe_approve(token_address, swap_route.mid_token, amount)
+            in_amount = CrvPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount)
+    _main_lp_token: address = self.main_lp_token
+    old_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
+    self._deposit(_crv_registry, self.main_pool, in_token, in_amount)
     new_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
     assert new_balance > old_balance, "Deposit failed"
     total_supply: uint256 = self.totalSupply
@@ -333,7 +337,7 @@ def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
     _main_deposit: address = self.main_deposit
     if _main_deposit != ZERO_ADDRESS:
         _main_pool = _main_deposit
-    if self.is_a:
+    if self.is_a_pool:
         out_amount = CrvAPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1, True)
     else:
         out_amount = CrvPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1)
@@ -343,14 +347,46 @@ def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
     if swap_route.mid_pool != ZERO_ADDRESS:
         i, j, is_underlying = CrvRegistry(_crv_registry).get_coin_indices(swap_route.mid_pool, out_token, token_address)
         if out_token == VETH:
-            out_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount, value=amount)
+            out_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount, value=out_amount)
         else:
-            self.safe_approve(out_token, swap_route.mid_token, amount)
+            self.safe_approve(out_token, swap_route.mid_token, out_amount)
             out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
     if out_token == VETH:
         send(msg.sender, out_amount)
     else:
         self.safe_transfer(out_token, msg.sender, out_amount)
+
+@external
+def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, new_deposit: address, _is_a_pool: bool):
+    out_token: address = _out_token
+    out_amount: uint256 = ERC20(self.main_lp_token).balanceOf(self)
+    i: int128 = -1
+    _main_pool: address = self.main_pool
+    coins: address[MAX_COINS] = CrvRegistry(self.crv_registry).get_underlying_coins(_main_pool)
+    for k in range(MAX_COINS):
+        if coins[k] == out_token:
+            i = k
+    assert i >= 0, "Wrong Token / Pool"
+    _main_deposit: address = self.main_deposit
+    if _main_deposit != ZERO_ADDRESS:
+        _main_pool = _main_deposit
+    if self.is_a_pool:
+        out_amount = CrvAPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1, True)
+    else:
+        out_amount = CrvPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1)
+
+    j: int128 = 0
+    is_underlying: bool = False
+    _crv_registry: address = self.crv_registry
+    if swap_route.mid_pool != ZERO_ADDRESS:
+        i, j, is_underlying = CrvRegistry(_crv_registry).get_coin_indices(swap_route.mid_pool, out_token, swap_route.mid_token)
+        if out_token == VETH:
+            out_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount, value=out_amount)
+        else:
+            self.safe_approve(out_token, swap_route.mid_token, out_amount)
+            out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
+        out_token = swap_route.mid_token
+    self._deposit(_crv_registry, _main_pool, out_token, out_amount)
 
 @external
 def transferAdminship(_admin: address):
