@@ -31,11 +31,7 @@ main_pool_coin_count: public(uint256)
 validators: public(HashMap[address, bool])
 admin: public(address)
 
-APPROVE_MID: constant(Bytes[4]) = method_id("approve(address,uint256)")
-TRANSFER_MID: constant(Bytes[4]) = method_id("transfer(address,uint256)")
-TRANSFERFROM_MID: constant(Bytes[4]) = method_id("transferFrom(address,address,uint256)")
 MAX_COINS: constant(int128) = 8
-
 VETH: constant(address) = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE
 
 interface CrvRegistry:
@@ -106,7 +102,7 @@ def safe_approve(_token: address, _to: address, _value: uint256):
     _response: Bytes[32] = raw_call(
         _token,
         concat(
-            APPROVE_MID,
+            method_id("approve(address,uint256)"),
             convert(_to, bytes32),
             convert(_value, bytes32)
         ),
@@ -120,7 +116,7 @@ def safe_transfer(_token: address, _to: address, _value: uint256):
     _response: Bytes[32] = raw_call(
         _token,
         concat(
-            TRANSFER_MID,
+            method_id("transfer(address,uint256)"),
             convert(_to, bytes32),
             convert(_value, bytes32)
         ),
@@ -134,7 +130,7 @@ def safe_transfer_from(_token: address, _from: address, _to: address, _value: ui
     _response: Bytes[32] = raw_call(
         _token,
         concat(
-            TRANSFERFROM_MID,
+            method_id("transferFrom(address,address,uint256)"),
             convert(_from, bytes32),
             convert(_to, bytes32),
             convert(_value, bytes32)
@@ -190,7 +186,7 @@ def decreaseAllowance(_spender: address, _value: uint256) -> bool:
     return True
 
 @internal
-def _deposit(_crv_registry: address, main_pool: address, in_token: address, in_amount: uint256):
+def _deposit(_crv_registry: address, main_pool: address, _main_deposit: address, _is_a_pool: bool, in_token: address, in_amount: uint256):
     _main_pool: address = main_pool
     coins: address[MAX_COINS] = CrvRegistry(_crv_registry).get_underlying_coins(_main_pool)
     i: int128 = -1
@@ -220,7 +216,7 @@ def _deposit(_crv_registry: address, main_pool: address, in_token: address, in_a
         payload = concat(bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0)
 
     m_id: Bytes[4] = empty(Bytes[4])
-    if self.is_a_pool:
+    if _is_a_pool:
         true_bytes32: bytes32 = convert(True, bytes32)
         if _main_pool_coin_count == 2:
             m_id = method_id("add_liquidity(uint256[2],uint256,bool)")
@@ -266,7 +262,6 @@ def _deposit(_crv_registry: address, main_pool: address, in_token: address, in_a
             m_id = method_id("add_liquidity(uint256[8],uint256)")
             payload = slice(payload, 0, 288)
 
-    _main_deposit: address = self.main_deposit
     if _main_deposit != ZERO_ADDRESS:
         _main_pool = _main_deposit
     if in_token == VETH:
@@ -309,7 +304,7 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
             in_amount = CrvPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount)
     _main_lp_token: address = self.main_lp_token
     old_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
-    self._deposit(_crv_registry, self.main_pool, in_token, in_amount)
+    self._deposit(_crv_registry, self.main_pool, self.main_deposit, self.is_a_pool, in_token, in_amount)
     new_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
     assert new_balance > old_balance, "Deposit failed"
     total_supply: uint256 = self.totalSupply
@@ -358,11 +353,13 @@ def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
 
 @external
 def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, new_deposit: address, _is_a_pool: bool):
+    assert self.validators[msg.sender], "Not Validator"
     out_token: address = _out_token
     out_amount: uint256 = ERC20(self.main_lp_token).balanceOf(self)
     i: int128 = -1
     _main_pool: address = self.main_pool
-    coins: address[MAX_COINS] = CrvRegistry(self.crv_registry).get_underlying_coins(_main_pool)
+    _crv_registry: address = self.crv_registry
+    coins: address[MAX_COINS] = CrvRegistry(_crv_registry).get_underlying_coins(_main_pool)
     for k in range(MAX_COINS):
         if coins[k] == out_token:
             i = k
@@ -374,10 +371,8 @@ def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, n
         out_amount = CrvAPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1, True)
     else:
         out_amount = CrvPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1)
-
     j: int128 = 0
     is_underlying: bool = False
-    _crv_registry: address = self.crv_registry
     if swap_route.mid_pool != ZERO_ADDRESS:
         i, j, is_underlying = CrvRegistry(_crv_registry).get_coin_indices(swap_route.mid_pool, out_token, swap_route.mid_token)
         if out_token == VETH:
@@ -386,14 +381,32 @@ def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, n
             self.safe_approve(out_token, swap_route.mid_token, out_amount)
             out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
         out_token = swap_route.mid_token
-    self._deposit(_crv_registry, _main_pool, out_token, out_amount)
+    self._deposit(_crv_registry, new_pool, new_deposit, _is_a_pool,  out_token, out_amount)
+    if CrvRegistry(_crv_registry).is_meta(new_pool):
+        assert CrvDeposit(new_deposit).pool() == new_pool, "Wrong Deposit Pool"
+    else:
+        assert new_deposit == ZERO_ADDRESS, "Wrong Deposit Pool"
+    self.main_pool = new_pool
+    self.main_deposit = new_deposit
+    self.is_a_pool = _is_a_pool
+    _main_pool_coin_count: uint256 = CrvRegistry(_crv_registry).get_n_coins(new_pool)[1]
+    assert _main_pool_coin_count >= 2 and _main_pool_coin_count <= convert(MAX_COINS, uint256), "Wrong Pool Coin Count"
+    self.main_pool_coin_count = _main_pool_coin_count
+    _main_lp_token: address = CrvRegistry(_crv_registry).get_lp_token(_main_pool)
+    assert _main_lp_token != ZERO_ADDRESS, "Wrong Pool"
+    self.main_lp_token = _main_lp_token
 
 @external
-def transferAdminship(_admin: address):
+def set_a_pool(_is_a_pool: bool):
+    assert msg.sender == self.admin
+    self.is_a_pool = _is_a_pool
+
+@external
+def transfer_admin(_admin: address):
     assert msg.sender == self.admin and _admin != ZERO_ADDRESS
     self.admin = _admin
 
 @external
-def setValidator(_validator: address, _value: bool):
+def set_validator(_validator: address, _value: bool):
     assert msg.sender == self.admin
     self.validators[_validator] = _value
