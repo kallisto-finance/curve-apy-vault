@@ -22,17 +22,19 @@ balanceOf: public(HashMap[address, uint256])
 allowance: public(HashMap[address, HashMap[address, uint256]])
 totalSupply: public(uint256)
 
-crv_registry: public(address)
 main_pool: public(address)
 main_deposit: public(address)
-is_a_pool: public(bool)
 main_lp_token: public(address)
 main_pool_coin_count: public(uint256)
 validators: public(HashMap[address, bool])
 admin: public(address)
 
+crv_registry: public(address)
+zap_deposit: public(address)
 MAX_COINS: constant(int128) = 8
 VETH: constant(address) = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE
+INIT_CRV_REGISTRY: constant(address) = 0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d7f5
+IS_A_POOL_IN_DEPOSIT: constant(address) = 0x0000000000000000000000000000000000000001 # use address(1) as deposit address for aave pool
 
 interface CrvRegistry:
     def is_meta(_pool: address) -> bool: view
@@ -45,9 +47,13 @@ interface CrvPool:
     def coins(i: uint256) -> address: view
     def remove_liquidity_one_coin(token_amount: uint256, i: int128, min_amount: uint256) -> uint256: nonpayable
     def exchange(i: int128, j: int128, dx: uint256, min_dy: uint256) -> uint256: nonpayable
+    def exchange_underlying(i: int128, j: int128, dx: uint256, min_dy: uint256) -> uint256: nonpayable
 
 interface CrvAPool:
     def remove_liquidity_one_coin(token_amount: uint256, i: int128, min_amount: uint256, use_underlying: bool) -> uint256: nonpayable
+
+interface CrvZapDeposit:
+    def remove_liquidity_one_coin(_pool: address, token_amount: uint256, i: int128, min_amount: uint256) -> uint256: nonpayable
 
 interface CrvDeposit:
     def pool() -> address: view
@@ -69,19 +75,19 @@ def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_
     self.admin = msg.sender
     self.validators[msg.sender] = True
     self.main_pool = _main_pool
-    if CrvRegistry(0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d7f5).is_meta(_main_pool):
+    if CrvRegistry(INIT_CRV_REGISTRY).is_meta(_main_pool) and _main_deposit != 0xA79828DF1850E8a3A3064576f380D90aECDD3359:
         assert CrvDeposit(_main_deposit).pool() == _main_pool, "Wrong Deposit Pool"
     else:
-        assert _main_deposit == ZERO_ADDRESS, "Wrong Deposit Pool"
+        assert _main_deposit == ZERO_ADDRESS or _main_deposit == IS_A_POOL_IN_DEPOSIT, "Wrong Deposit Pool"
     self.main_deposit = _main_deposit
-    self.crv_registry = 0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d7f5
-    _main_pool_coin_count: uint256 = CrvRegistry(0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d7f5).get_n_coins(_main_pool)[1]
+    self.crv_registry = INIT_CRV_REGISTRY
+    _main_pool_coin_count: uint256 = CrvRegistry(INIT_CRV_REGISTRY).get_n_coins(_main_pool)[1]
     assert _main_pool_coin_count >= 2 and _main_pool_coin_count <= convert(MAX_COINS, uint256), "Wrong Pool Coin Count"
     self.main_pool_coin_count = _main_pool_coin_count
-    _main_lp_token: address = CrvRegistry(0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d7f5).get_lp_token(_main_pool)
+    _main_lp_token: address = CrvRegistry(INIT_CRV_REGISTRY).get_lp_token(_main_pool)
     assert _main_lp_token != ZERO_ADDRESS, "Wrong Pool"
     self.main_lp_token = _main_lp_token
-    self.is_a_pool = _is_a_pool
+    self.zap_deposit = 0xA79828DF1850E8a3A3064576f380D90aECDD3359
 
 @internal
 def _mint(_to: address, _value: uint256):
@@ -186,7 +192,7 @@ def decreaseAllowance(_spender: address, _value: uint256) -> bool:
     return True
 
 @internal
-def _deposit(_crv_registry: address, main_pool: address, _main_deposit: address, _is_a_pool: bool, in_token: address, in_amount: uint256):
+def _deposit(_crv_registry: address, main_pool: address, _main_deposit: address, in_token: address, in_amount: uint256):
     _main_pool: address = main_pool
     coins: address[MAX_COINS] = CrvRegistry(_crv_registry).get_underlying_coins(_main_pool)
     i: int128 = -1
@@ -197,26 +203,25 @@ def _deposit(_crv_registry: address, main_pool: address, _main_deposit: address,
     _main_pool_coin_count: uint256 = self.main_pool_coin_count
     payload: Bytes[320] = empty(Bytes[320])
     length: uint256 = len(payload)
-    bytes32_0: bytes32 = convert(0, bytes32)
     if i == 0:
-        payload = concat(convert(in_amount, bytes32), bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0)
+        payload = concat(convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32)
     elif i == 1:
-        payload = concat(bytes32_0, convert(in_amount, bytes32), bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0)
+        payload = concat(EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32)
     elif i == 2:
-        payload = concat(bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0)
+        payload = concat(EMPTY_BYTES32, EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32)
     elif i == 3:
-        payload = concat(bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0)
+        payload = concat(EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32)
     elif i == 4:
-        payload = concat(bytes32_0, bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0, bytes32_0, bytes32_0, bytes32_0)
+        payload = concat(EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32)
     elif i == 5:
-        payload = concat(bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0, bytes32_0, bytes32_0)
+        payload = concat(EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32)
     elif i == 6:
-        payload = concat(bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0, bytes32_0)
+        payload = concat(EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32, EMPTY_BYTES32)
     else:
-        payload = concat(bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, bytes32_0, convert(in_amount, bytes32), bytes32_0)
+        payload = concat(EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, EMPTY_BYTES32, convert(in_amount, bytes32), EMPTY_BYTES32)
 
     m_id: Bytes[4] = empty(Bytes[4])
-    if _is_a_pool:
+    if _main_deposit == IS_A_POOL_IN_DEPOSIT:
         true_bytes32: bytes32 = convert(True, bytes32)
         if _main_pool_coin_count == 2:
             m_id = method_id("add_liquidity(uint256[2],uint256,bool)")
@@ -239,6 +244,28 @@ def _deposit(_crv_registry: address, main_pool: address, _main_deposit: address,
         else:
             m_id = method_id("add_liquidity(uint256[8],uint256,bool)")
             payload = concat(slice(payload, 0, 288), true_bytes32)
+    elif _main_deposit == self.zap_deposit:
+        if _main_pool_coin_count == 2:
+            m_id = method_id("add_liquidity(address,uint256[2],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 96))
+        elif _main_pool_coin_count == 3:
+            m_id = method_id("add_liquidity(address,uint256[3],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 128))
+        elif _main_pool_coin_count == 4:
+            m_id = method_id("add_liquidity(address,uint256[4],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 160))
+        elif _main_pool_coin_count == 5:
+            m_id = method_id("add_liquidity(address,uint256[5],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 192))
+        elif _main_pool_coin_count == 6:
+            m_id = method_id("add_liquidity(address,uint256[6],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 224))
+        elif _main_pool_coin_count == 7:
+            m_id = method_id("add_liquidity(address,uint256[7],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 256))
+        else:
+            m_id = method_id("add_liquidity(address,uint256[8],uint256)")
+            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 288))
     else:
         if _main_pool_coin_count == 2:
             m_id = method_id("add_liquidity(uint256[2],uint256)")
@@ -262,7 +289,7 @@ def _deposit(_crv_registry: address, main_pool: address, _main_deposit: address,
             m_id = method_id("add_liquidity(uint256[8],uint256)")
             payload = slice(payload, 0, 288)
 
-    if _main_deposit != ZERO_ADDRESS:
+    if _main_deposit != ZERO_ADDRESS and _main_deposit != IS_A_POOL_IN_DEPOSIT:
         _main_pool = _main_deposit
     if in_token == VETH:
         raw_call(
@@ -301,10 +328,13 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
             in_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount, value=amount)
         else:
             self.safe_approve(token_address, swap_route.mid_token, amount)
-            in_amount = CrvPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount)
+            if is_underlying:
+                in_amount = CrvPool(swap_route.mid_pool).exchange_underlying(i, j, amount, swap_route.min_amount)
+            else:
+                in_amount = CrvPool(swap_route.mid_pool).exchange(i, j, amount, swap_route.min_amount)
     _main_lp_token: address = self.main_lp_token
     old_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
-    self._deposit(_crv_registry, self.main_pool, self.main_deposit, self.is_a_pool, in_token, in_amount)
+    self._deposit(_crv_registry, self.main_pool, self.main_deposit, in_token, in_amount)
     new_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
     assert new_balance > old_balance, "Deposit failed"
     total_supply: uint256 = self.totalSupply
@@ -319,7 +349,8 @@ def deposit(token_address: address, amount: uint256, swap_route: SwapRoute):
 def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
     self._burn(msg.sender, amount)
     out_token: address = token_address
-    out_amount: uint256 = amount * ERC20(self.main_lp_token).balanceOf(self) / self.totalSupply
+    lp_token: address = self.main_lp_token
+    out_amount: uint256 = amount * ERC20(lp_token).balanceOf(self) / self.totalSupply
     if swap_route.mid_pool != ZERO_ADDRESS:
         out_token = swap_route.mid_token
     i: int128 = -1
@@ -330,12 +361,18 @@ def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
             i = k
     assert i >= 0, "Wrong Token / Pool"
     _main_deposit: address = self.main_deposit
-    if _main_deposit != ZERO_ADDRESS:
-        _main_pool = _main_deposit
-    if self.is_a_pool:
+    if _main_deposit == IS_A_POOL_IN_DEPOSIT:
+        self.safe_approve(lp_token, _main_pool, out_amount)
         out_amount = CrvAPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1, True)
-    else:
+    elif _main_deposit == ZERO_ADDRESS:
+        self.safe_approve(lp_token, _main_pool, out_amount)
         out_amount = CrvPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1)
+    elif _main_deposit == self.zap_deposit:
+        self.safe_approve(lp_token, _main_deposit, out_amount)
+        out_amount = CrvZapDeposit(_main_deposit).remove_liquidity_one_coin(_main_pool, out_amount, i, 1)
+    else:
+        self.safe_approve(lp_token, _main_deposit, out_amount)
+        out_amount = CrvPool(_main_deposit).remove_liquidity_one_coin(out_amount, i, 1)
     j: int128 = 0
     is_underlying: bool = False
     _crv_registry: address = self.crv_registry
@@ -345,7 +382,10 @@ def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
             out_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount, value=out_amount)
         else:
             self.safe_approve(out_token, swap_route.mid_token, out_amount)
-            out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
+            if is_underlying:
+                out_amount = CrvPool(swap_route.mid_pool).exchange_underlying(i, j, out_amount, swap_route.min_amount)
+            else:
+                out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
     if out_token == VETH:
         send(msg.sender, out_amount)
     else:
@@ -355,7 +395,8 @@ def withdraw(token_address: address, amount: uint256, swap_route: SwapRoute):
 def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, new_deposit: address, _is_a_pool: bool):
     assert self.validators[msg.sender], "Not Validator"
     out_token: address = _out_token
-    out_amount: uint256 = ERC20(self.main_lp_token).balanceOf(self)
+    lp_token: address = self.main_lp_token
+    out_amount: uint256 = ERC20(lp_token).balanceOf(self)
     i: int128 = -1
     _main_pool: address = self.main_pool
     _crv_registry: address = self.crv_registry
@@ -365,12 +406,19 @@ def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, n
             i = k
     assert i >= 0, "Wrong Token / Pool"
     _main_deposit: address = self.main_deposit
-    if _main_deposit != ZERO_ADDRESS:
-        _main_pool = _main_deposit
-    if self.is_a_pool:
+    _zap_deposit: address = self.zap_deposit
+    if _main_deposit == IS_A_POOL_IN_DEPOSIT:
+        self.safe_approve(lp_token, _main_pool, out_amount)
         out_amount = CrvAPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1, True)
-    else:
+    elif _main_deposit == ZERO_ADDRESS:
+        self.safe_approve(lp_token, _main_pool, out_amount)
         out_amount = CrvPool(_main_pool).remove_liquidity_one_coin(out_amount, i, 1)
+    elif _main_deposit == _zap_deposit:
+        self.safe_approve(lp_token, _main_deposit, out_amount)
+        out_amount = CrvZapDeposit(_main_deposit).remove_liquidity_one_coin(_main_pool, out_amount, i, 1)
+    else:
+        self.safe_approve(lp_token, _main_deposit, out_amount)
+        out_amount = CrvPool(_main_deposit).remove_liquidity_one_coin(out_amount, i, 1)
     j: int128 = 0
     is_underlying: bool = False
     if swap_route.mid_pool != ZERO_ADDRESS:
@@ -379,16 +427,18 @@ def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, n
             out_amount = CrvEthPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount, value=out_amount)
         else:
             self.safe_approve(out_token, swap_route.mid_token, out_amount)
-            out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
+            if is_underlying:
+                out_amount = CrvPool(swap_route.mid_pool).exchange_underlying(i, j, out_amount, swap_route.min_amount)
+            else:
+                out_amount = CrvPool(swap_route.mid_pool).exchange(i, j, out_amount, swap_route.min_amount)
         out_token = swap_route.mid_token
-    self._deposit(_crv_registry, new_pool, new_deposit, _is_a_pool,  out_token, out_amount)
-    if CrvRegistry(_crv_registry).is_meta(new_pool):
+    self._deposit(_crv_registry, new_pool, new_deposit,  out_token, out_amount)
+    if CrvRegistry(_crv_registry).is_meta(new_pool) and new_deposit != _zap_deposit:
         assert CrvDeposit(new_deposit).pool() == new_pool, "Wrong Deposit Pool"
     else:
-        assert new_deposit == ZERO_ADDRESS, "Wrong Deposit Pool"
+        assert new_deposit == ZERO_ADDRESS or new_deposit == IS_A_POOL_IN_DEPOSIT, "Wrong Deposit Pool"
     self.main_pool = new_pool
     self.main_deposit = new_deposit
-    self.is_a_pool = _is_a_pool
     _main_pool_coin_count: uint256 = CrvRegistry(_crv_registry).get_n_coins(new_pool)[1]
     assert _main_pool_coin_count >= 2 and _main_pool_coin_count <= convert(MAX_COINS, uint256), "Wrong Pool Coin Count"
     self.main_pool_coin_count = _main_pool_coin_count
@@ -397,9 +447,14 @@ def update_pool(_out_token: address, swap_route: SwapRoute, new_pool: address, n
     self.main_lp_token = _main_lp_token
 
 @external
-def set_a_pool(_is_a_pool: bool):
+def make_fee(amount: uint256):
     assert msg.sender == self.admin
-    self.is_a_pool = _is_a_pool
+    self._mint(msg.sender, amount)
+
+@external
+def update_zap_deposit(_new_zap_deposit: address):
+    assert msg.sender == self.admin
+    self.zap_deposit = _new_zap_deposit
 
 @external
 def transfer_admin(_admin: address):
@@ -410,3 +465,8 @@ def transfer_admin(_admin: address):
 def set_validator(_validator: address, _value: bool):
     assert msg.sender == self.admin
     self.validators[_validator] = _value
+
+@external
+@payable
+def __default__():
+    pass
