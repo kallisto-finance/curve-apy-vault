@@ -1,5 +1,5 @@
 from brownie import accounts
-
+from brownie import Contract
 
 def main():
     acct = accounts.load("deployer_account")
