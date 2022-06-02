@@ -19,6 +19,18 @@ event Approval:
     _spender: indexed(address)
     _value: uint256
 
+event Deposit:
+    _token: indexed(address)
+    _from: indexed(address)
+    _to: indexed(address)
+    amount: uint256
+
+event Withdraw:
+    _token: indexed(address)
+    _from: indexed(address)
+    _to: indexed(address)
+    amount: uint256
+
 name: public(String[64])
 symbol: public(String[32])
 
@@ -369,6 +381,7 @@ def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynA
         self._mint(msg.sender, new_balance)
     else:
         self._mint(msg.sender, (new_balance - old_balance) * total_supply / old_balance)
+    log Deposit(token_address, msg.sender, msg.sender, amount)
 
 @internal
 def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int128, out_amount: uint256) -> uint256:
@@ -421,6 +434,7 @@ def withdraw(token_address: address, amount: uint256, i: int128, swap_route: Dyn
         send(msg.sender, out_amount)
     else:
         self.safe_transfer(out_token, msg.sender, out_amount)
+    log Withdraw(out_token, msg.sender, msg.sender, out_amount)
 
 @external
 def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], new_pool: address, new_deposit: address, new_i: int128, new_pool_coin_count: uint8, new_lp_token: address, new_is_crypto_pool: bool):
