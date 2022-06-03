@@ -34,6 +34,11 @@ event Withdraw:
     _to: indexed(address)
     amount: uint256
 
+event Updated:
+    old_pool: indexed(address)
+    new_pool: indexed(address)
+    _timestamp: uint256
+
 # ERC20 standard interfaces
 name: public(String[64])
 symbol: public(String[32])
@@ -531,6 +536,7 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
     @param swap_route token swap route from withdrawing to depositing into the new pool
     @param new_pool new main curve pool
     @param new_deposit new main deposit address
+    @param new_i deposit token index of new main pool
     @param new_pool_coin_count coin count of new main pool
     @param new_lp_token curve LP token address of the new main pool
     @param new_is_crypto_pool true if new main pool coin index type is uint256
@@ -556,6 +562,7 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
     self.main_pool_coin_count = new_pool_coin_count
     self.main_lp_token = new_lp_token
     self.is_crypto_pool = new_is_crypto_pool
+    log Updated(_main_pool, new_pool, block.timestamp)
 
 @external
 def make_fee(amount: uint256):
