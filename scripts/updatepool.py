@@ -14,4 +14,4 @@ def main():
     main_coin_count = 0
     lp_token = ""
     is_crypto = False
-    Vault.update_pool(withdraw_token, token_index, swap_route, main_pool, main_deposit, deposit_token_index, main_coin_count, lp_token, is_crypto, {"from": acct})
+    Vault.update_pool(withdraw_token, token_index, swap_route, main_pool, main_deposit, deposit_token_index, main_coin_count, lp_token, is_crypto, 1, {"from": acct})

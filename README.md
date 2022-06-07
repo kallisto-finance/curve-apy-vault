@@ -15,6 +15,7 @@ User deposits token into Kallisto vault.
 | amount | uint256 | deposited amount |
 | i | int128 | deposit token index of the main pool |
 | swap_route | SwapRoute[] | best swap route on Curve |
+| min_amount | uint256 | minimum amount of vault balance after deposit |
 
 **withdraw**
 
@@ -26,6 +27,7 @@ User withdraws token from Kallisto Vault
 | amount | uint256 | withdraw vault balance amount (not token amount) |
 | i | int128 | withdraw token index of the main pool |
 | swap_route | SwapRoute[] | best swap route on Curve |
+| min_amount | uint256 | minimum amount of withdrawn token from withdraw |
 
 
 **update_pool**
@@ -43,6 +45,7 @@ Switch Kallisto vault position from current Curve pool to new best Curve pool
 | new_pool_coin_count | uint8 | coin count of new Curve Pool |
 | new_lp_token | address | Address of new Curve LP token |
 | new_is_crypto_pool | bool | True if new main pool coin index type is uint256 |
+| new_lp_min_amount | uint256 | minimum amount of new curve lp token |
 
 **make_fee**
 
@@ -111,7 +114,6 @@ Pauses contract
 | j | address | swap pool to use for swap |
 | is_underlying | bool | true if exchange underlying coins using exchange_underlying() |
 | is_crypto_pool | bool | true if token index type is uint256 |
-| min_amount | uint256 | exchange out token minimum amount |
 
 
 ### Disclaimer
