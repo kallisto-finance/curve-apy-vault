@@ -8,7 +8,6 @@ struct SwapRoute:
     j: int128 # out token index
     is_underlying: bool # true if exchange underlying coins using exchange_underlying()
     is_crypto_pool: bool # true if token index in uint256
-    min_amount: uint256 # exchange out token minimum amount
 
 # ERC20 events
 event Transfer:
@@ -25,19 +24,21 @@ event Approval:
 event Deposit:
     _token: indexed(address)
     _from: indexed(address)
-    _to: indexed(address)
-    amount: uint256
+    token_amount: uint256
+    vault_balance: uint256
 
 event Withdraw:
     _token: indexed(address)
     _from: indexed(address)
-    _to: indexed(address)
-    amount: uint256
+    token_amount: uint256
+    vault_balance: uint256
 
 event Updated:
     old_pool: indexed(address)
     new_pool: indexed(address)
     _timestamp: uint256
+    from_amount: uint256
+    to_amount: uint256
 
 # ERC20 standard interfaces
 name: public(String[64])
@@ -100,9 +101,6 @@ interface ERC20:
 interface WrappedEth:
     def deposit(): payable
     def withdraw(amount: uint256): nonpayable
-
-# main_pool_coin_count = CrvRegistry(crv_registry).get_n_coins(main_pool)[1] : total count include underlying coins. We can't use this in the code as some pools don't work
-# main_lp_token = CrvRegistry(crv_registry).get_lp_token(main_pool) We can't use this as some pools don't work
 
 @external
 def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_deposit: address, _main_pool_coin_count: uint8, _main_lp_token: address, _is_crypto_pool: bool):
@@ -246,7 +244,6 @@ def _deposit(main_pool_: address, _main_deposit: address, _main_pool_coin_count:
     @param _main_pool_coin_count (underlying) coin count of the main curve pool
     @param i in token index
     @param in_amount token in amount
-    @return increased curve LP token amount
     """
     _main_pool: address = main_pool_
     payload: Bytes[320] = empty(Bytes[320])
@@ -359,7 +356,7 @@ def _deposit(main_pool_: address, _main_deposit: address, _main_pool_coin_count:
         )
 
 @internal
-def _swap(pool: address, i: int128, j: int128, from_token: address, to_token: address, is_underlying: bool, from_amount: uint256, min_amount: uint256, is_crypto_pool: bool) -> uint256:
+def _swap(pool: address, i: int128, j: int128, from_token: address, to_token: address, is_underlying: bool, from_amount: uint256, is_crypto_pool: bool) -> uint256:
     """
     @notice swap function using curve pool
     @param pool swap pool to exchange tokens
@@ -369,8 +366,7 @@ def _swap(pool: address, i: int128, j: int128, from_token: address, to_token: ad
     @param to_token token address to get out from swap pool
     @param is_underlying true for meta pools
     @param from_amount from_token amount
-    @param min_amount minimum amount of to_token from swap
-    @param is_crypto true for the pools that use uint256 for indexes
+    @param is_crypto_pool true for the pools that use uint256 for indexes
     """
     to_amount: uint256 = 0
     if to_token == VETH: # Wrapping ETH
@@ -387,23 +383,23 @@ def _swap(pool: address, i: int128, j: int128, from_token: address, to_token: ad
     if is_crypto_pool:
         # if the pool requires uint256 type indexes
         if from_token == VETH:
-            CryptoPool(pool).exchange(convert(i, uint256), convert(j, uint256), from_amount, min_amount, value=from_amount)
+            CryptoPool(pool).exchange(convert(i, uint256), convert(j, uint256), from_amount, 0, value=from_amount)
         else:
             self.safe_approve(from_token, pool, from_amount)
             if is_underlying:
-                CryptoPool(pool).exchange_underlying(convert(i, uint256), convert(j, uint256), from_amount, min_amount)
+                CryptoPool(pool).exchange_underlying(convert(i, uint256), convert(j, uint256), from_amount, 0)
             else:
-                CryptoPool(pool).exchange(convert(i, uint256), convert(j, uint256), from_amount, min_amount)
+                CryptoPool(pool).exchange(convert(i, uint256), convert(j, uint256), from_amount, 0)
     else:
         # if the pool requires int128 type indexes
         if from_token == VETH:
-            CrvPool(pool).exchange(i, j, from_amount, min_amount, value=from_amount)
+            CrvPool(pool).exchange(i, j, from_amount, 0, value=from_amount)
         else:
             self.safe_approve(from_token, pool, from_amount)
             if is_underlying:
-                CrvPool(pool).exchange_underlying(i, j, from_amount, min_amount)
+                CrvPool(pool).exchange_underlying(i, j, from_amount, 0)
             else:
-                CrvPool(pool).exchange(i, j, from_amount, min_amount)
+                CrvPool(pool).exchange(i, j, from_amount, 0)
     # calculate swapped amount
     if to_token == VETH:
         to_amount = self.balance - to_amount
@@ -414,13 +410,15 @@ def _swap(pool: address, i: int128, j: int128, from_token: address, to_token: ad
 @external
 @payable
 @nonreentrant("lock")
-def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP]):
+def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], min_amount: uint256) -> uint256:
     """
     @notice Deposit token
     @param token_address deposit token address
     @param amount deposit token amount
     @param i deposit token index of the main pool (even after swap)
     @param swap_route swap route before deposit
+    @param min_amount minimum amount of vault balance after deposit
+    @return added balance of vault
     """
     assert not self.paused, "Paused"
     self.safe_transfer_from(token_address, msg.sender, self, amount)
@@ -429,7 +427,7 @@ def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynA
     for route in swap_route:
         # swap tokens with swap route
         if route.swap_pool != ZERO_ADDRESS:
-            in_amount = self._swap(route.swap_pool, route.i, route.j, in_token, route.j_token, route.is_underlying, in_amount, route.min_amount, route.is_crypto_pool)
+            in_amount = self._swap(route.swap_pool, route.i, route.j, in_token, route.j_token, route.is_underlying, in_amount, route.is_crypto_pool)
             in_token = route.j_token
     _main_lp_token: address = self.main_lp_token
     old_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
@@ -438,11 +436,12 @@ def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynA
     assert new_balance > old_balance, "Deposit failed"
     total_supply: uint256 = self.totalSupply
     # calculate mint amount as increas LP token amount * totalSupply / old LP balance
-    if total_supply == 0:
-        self._mint(msg.sender, new_balance)
-    else:
-        self._mint(msg.sender, (new_balance - old_balance) * total_supply / old_balance)
-    log Deposit(token_address, msg.sender, msg.sender, amount)
+    if total_supply > 0:
+        new_balance = (new_balance - old_balance) * total_supply / old_balance
+    assert new_balance >= min_amount, "High Slippage"
+    self._mint(msg.sender, new_balance)
+    log Deposit(token_address, msg.sender, amount, new_balance)
+    return new_balance
 
 @internal
 def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int128, out_amount: uint256) -> uint256:
@@ -499,36 +498,39 @@ def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int
 @external
 @payable
 @nonreentrant("lock")
-def withdraw(token_address: address, amount: uint256, i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP]):
+def withdraw(token_address: address, amount: uint256, i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], min_amount: uint256) -> uint256:
     """
     @notice Withdraw token
     @param token_address withdraw token address
     @param amount withdraw vault balance amount(not token amount)
     @param i withdraw token index of the main pool
     @param swap_route token swap route after withdraw from curve pool, users will get the final token of the swap route
+    @param min_amount minimum amount of withdrawn token from withdraw
+    @return withdrawn token amount
     """
     out_token: address = token_address
     lp_token: address = self.main_lp_token
     out_amount: uint256 = amount * ERC20(lp_token).balanceOf(self) / self.totalSupply
     _main_pool: address = self.main_pool
-    out_amount = self._withdraw(lp_token, _main_pool, out_token, i, out_amount)
     # withdraw token from the curve pool
-    assert out_amount > 0, "Withdraw Failed"
+    out_amount = self._withdraw(lp_token, _main_pool, out_token, i, out_amount)
     self._burn(msg.sender, amount)
     for route in swap_route:
         # swap token with swap route
         if route.swap_pool != ZERO_ADDRESS:
-            out_amount = self._swap(route.swap_pool, route.i, route.j, out_token, route.j_token, route.is_underlying, out_amount, route.min_amount, route.is_crypto_pool)
+            out_amount = self._swap(route.swap_pool, route.i, route.j, out_token, route.j_token, route.is_underlying, out_amount, route.is_crypto_pool)
             out_token = route.j_token
+    assert out_amount >= min_amount, "High Slippage"
     # transfer token to user
     if out_token == VETH:
         send(msg.sender, out_amount)
     else:
         self.safe_transfer(out_token, msg.sender, out_amount)
-    log Withdraw(out_token, msg.sender, msg.sender, out_amount)
+    log Withdraw(out_token, msg.sender, out_amount, amount)
+    return out_amount
 
 @external
-def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], new_pool: address, new_deposit: address, new_i: int128, new_pool_coin_count: uint8, new_lp_token: address, new_is_crypto_pool: bool):
+def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], new_pool: address, new_deposit: address, new_i: int128, new_pool_coin_count: uint8, new_lp_token: address, new_is_crypto_pool: bool, new_lp_min_amount: uint256):
     """
     @notice update pool information
     @param _out_token withdraw token address from the old pool
@@ -540,29 +542,32 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
     @param new_pool_coin_count coin count of new main pool
     @param new_lp_token curve LP token address of the new main pool
     @param new_is_crypto_pool true if new main pool coin index type is uint256
+    @param new_lp_min_amount minimum amount of new curve lp token
     """
     assert self.validators[msg.sender], "Not Validator"
     out_token: address = _out_token
     lp_token: address = self.main_lp_token
     out_amount: uint256 = ERC20(lp_token).balanceOf(self)
+    from_amount: uint256 = out_amount
     _main_pool: address = self.main_pool
     # withdraw token from the old pool
     out_amount = self._withdraw(lp_token, _main_pool, out_token, old_i, out_amount)
-    assert out_amount > 0, "Withdraw Failed"
     for route in swap_route:
         # swap token with swap route
         if route.swap_pool != ZERO_ADDRESS:
-            out_amount = self._swap(route.swap_pool, route.i, route.j, out_token, route.j_token, route.is_underlying, out_amount, route.min_amount, route.is_crypto_pool)
+            out_amount = self._swap(route.swap_pool, route.i, route.j, out_token, route.j_token, route.is_underlying, out_amount, route.is_crypto_pool)
             out_token = route.j_token
     # deposit token into the new pool
     self._deposit(new_pool, new_deposit, new_pool_coin_count, new_i, out_token, out_amount)
+    to_amount: uint256 = ERC20(new_lp_token).balanceOf(self)
+    assert to_amount >= new_lp_min_amount, "High Slippage"
     # update states
     self.main_pool = new_pool
     self.main_deposit = new_deposit
     self.main_pool_coin_count = new_pool_coin_count
     self.main_lp_token = new_lp_token
     self.is_crypto_pool = new_is_crypto_pool
-    log Updated(_main_pool, new_pool, block.timestamp)
+    log Updated(_main_pool, new_pool, block.timestamp, from_amount, to_amount)
 
 @external
 def make_fee(amount: uint256):
