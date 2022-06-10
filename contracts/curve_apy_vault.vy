@@ -496,7 +496,6 @@ def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int
     return ERC20(out_token).balanceOf(self) - old_balance
 
 @external
-@payable
 @nonreentrant("lock")
 def withdraw(token_address: address, amount: uint256, i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], min_amount: uint256) -> uint256:
     """
@@ -530,6 +529,7 @@ def withdraw(token_address: address, amount: uint256, i: int128, swap_route: Dyn
     return out_amount
 
 @external
+@nonreentrant('lock')
 def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], new_pool: address, new_deposit: address, new_i: int128, new_pool_coin_count: uint8, new_lp_token: address, new_is_crypto_pool: bool, new_lp_min_amount: uint256):
     """
     @notice update pool information
@@ -578,7 +578,10 @@ def make_fee(amount: uint256):
 @external
 def transfer_admin(_admin: address):
 # transfer admin permission
-    assert msg.sender == self.admin and _admin != ZERO_ADDRESS
+    old_admin: address = self.admin
+    assert msg.sender == old_admin and _admin != ZERO_ADDRESS and old_admin != _admin
+    self.validators[old_admin] = False
+    self.validators[msg.sender] = True
     self.admin = _admin
 
 @external
