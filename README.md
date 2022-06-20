@@ -5,7 +5,7 @@ This vault chases the highest APY paying pools on Curve in a cost-efficient way.
 
 ### External functions
 
-**deposit**
+#### deposit
 
 User deposits token into Kallisto vault.
 
@@ -17,7 +17,7 @@ User deposits token into Kallisto vault.
 | swap_route | SwapRoute[] | best swap route on Curve |
 | min_amount | uint256 | minimum amount of vault balance after deposit |
 
-**withdraw**
+#### withdraw
 
 User withdraws token from Kallisto Vault
 
@@ -30,7 +30,7 @@ User withdraws token from Kallisto Vault
 | min_amount | uint256 | minimum amount of withdrawn token from withdraw |
 
 
-**update_pool**
+#### update_pool
 
 Switch Kallisto vault position from current Curve pool to new best Curve pool
 
@@ -47,7 +47,7 @@ Switch Kallisto vault position from current Curve pool to new best Curve pool
 | new_is_crypto_pool | bool | True if new main pool coin index type is uint256 |
 | new_lp_min_amount | uint256 | minimum amount of new curve lp token |
 
-**make_fee**
+#### make_fee
 
 Apply performance fee on vault earnings
 
@@ -55,16 +55,16 @@ Apply performance fee on vault earnings
 | --- | --- | --- |
 | amount | uint256 | Fee amount|
 
-**transfer_admin**
+#### transfer_admin
 
 Transfer Contract Admin rights
 
 | Key | Type | Description |
 | --- | --- | --- |
 
-**Emergency Functions**
+#### Emergency Functions
 
-**set_main_pool**
+#### set_main_pool
 
 Set the current Curve pool
 
@@ -72,13 +72,13 @@ Set the current Curve pool
 | --- | --- | --- |
 | _new_pool | address | Address of new Curve pool |
 
-**set_main_deposit**
+#### set_main_deposit
 
 | Key | Type | Description |
 | --- | --- | --- |
 
 
-**set_main_pool_coin_count**
+#### set_main_pool_coin_count
 
 Set the number of coins included in the current Curve pool
 
@@ -87,13 +87,13 @@ Set the number of coins included in the current Curve pool
 | _new_main_pool_coin_count | uint8 | Number of coins |
 
 
-**set_main_lp_token**
+#### set_main_lp_token
 
 | Key | Type | Description |
 | --- | --- | --- |
 | _new_main_lp_token | address | Token address of
 
-**pause**
+#### pause
 
 Pauses contract
 
@@ -104,7 +104,7 @@ Pauses contract
 
 ### Struct
 
-**SwapRoute**
+#### SwapRoute
 
 | Key | Type | Description |
 | --- | --- | --- |
@@ -116,6 +116,6 @@ Pauses contract
 | is_crypto_pool | bool | true if token index type is uint256 |
 
 
-### Disclaimer
+### Disclaimer: Please Read Carefuly
 
 Kallisto does not manage any portfolios. You must make an independent judgment as to whether to add liquidity to portfolios. Users of this repo should familiarize themselves with smart contracts to further consider the risks associated with smart contracts before adding liquidity to any portfolios or deployed smart contract. These smart contracts are non-custodial and come with no warranties. Kallisto does not endorse any pools in any of the smart contracts found in this repo. Kallisto is not giving you investment advice with this software and neither firm has control of your funds. Smart contracts are currently under audit, are alpha, works in progress and are undergoing daily updates that may result in errors or other issues.
