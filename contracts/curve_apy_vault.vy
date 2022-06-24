@@ -532,7 +532,11 @@ def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int
     @return withdrawn token amount
     """
     _main_deposit: address = self.main_deposit
-    old_balance: uint256 = ERC20(out_token).balanceOf(self)
+    old_balance: uint256 = 0
+    if out_token == VETH:
+        old_balance = self.balance
+    else:
+        old_balance = ERC20(out_token).balanceOf(self)
     if self.is_crypto_pool:
     # if the pool requires uint256 type indexes
         if _main_deposit == IS_A_POOL_IN_DEPOSIT:
@@ -570,7 +574,10 @@ def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int
             self.safe_approve(lp_token, _main_deposit, out_amount)
             CrvPool(_main_deposit).remove_liquidity_one_coin(out_amount, i, 1)
     # returns withdrawn token amount
-    return ERC20(out_token).balanceOf(self) - old_balance
+    if out_token == VETH:
+        return self.balance - old_balance
+    else:
+        return ERC20(out_token).balanceOf(self) - old_balance
 
 @external
 @nonreentrant("lock")
