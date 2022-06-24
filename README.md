@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ### Kallisto Curve APY Chaser Vault
 
 This vault chases the highest APY paying pools on Curve in a cost-efficient way. The strategy actively searches for the highest APY low risk pool on Curve and the best opportunity to join the selected pool. 
@@ -242,4 +241,3 @@ Pauses contract
 ### Disclaimer
 
 Kallisto does not manage any portfolios. You must make an independent judgment as to whether to add liquidity to portfolios. Users of this repo should familiarize themselves with smart contracts to further consider the risks associated with smart contracts before adding liquidity to any portfolios or deployed smart contract. These smart contracts are non-custodial and come with no warranties. Kallisto does not endorse any pools in any of the smart contracts found in this repo. Kallisto is not giving you investment advice with this software and neither firm has control of your funds. Smart contracts are currently under audit, are alpha, works in progress and are undergoing daily updates that may result in errors or other issues.
->>>>>>> 543f3562493d96d586c66b89ab0bc6d2dc051c67
