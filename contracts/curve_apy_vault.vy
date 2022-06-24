@@ -9,6 +9,10 @@ struct SwapRoute:
     is_underlying: bool # true if exchange underlying coins using exchange_underlying()
     is_crypto_pool: bool # true if token index in uint256
 
+struct LockedBalance:
+    amount: int128
+    end: uint256
+
 # ERC20 events
 event Transfer:
     _from: indexed(address)
@@ -47,17 +51,22 @@ symbol: public(String[32])
 balanceOf: public(HashMap[address, uint256])
 allowance: public(HashMap[address, HashMap[address, uint256]])
 totalSupply: public(uint256)
+liquidity: public(uint256)
 
 paused: public(bool)
 main_pool: public(address) # main curve pool address
 main_pool_coin_count: public(uint8) # (undelying) coin count
 is_crypto_pool: public(bool) # true if main pool coin index type is uint256
+management_fee: public(uint16)
+performance_fee: public(uint16)
+last_management_fee_epoch: uint40
 
 # main deposit address for meta pools
 # address(0) for base pools
 # addresss(1) for lending pools (add_liquidity function has one more argument)
 main_deposit: public(address)
 main_lp_token: public(address) # Curve LP address of main pool
+main_liquidity_gauge: public(address)
 validators: public(HashMap[address, bool]) # validators who can update pool
 admin: public(address) # admin
 
@@ -65,10 +74,16 @@ zap_deposit: public(address) # ZAP deposit pool address that curve provides
 MAX_COINS: constant(uint8) = 8 # MAX_COINS of curve pools
 VETH: constant(address) = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE # Virtual address for ETH coin
 WETH: constant(address) = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+VECRV: constant(address) = 0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2
+CRV: constant(address) = 0xD533a949740bb3306d119CC777fa900bA034cd52
+CRV_MINTER: constant(address) = 0xd061D61a4d941c39E5453435B6345Dc261C2fcE0
 IS_A_POOL_IN_DEPOSIT: constant(address) = 0x0000000000000000000000000000000000000001 # use address(1) as deposit address for aave pools
 INIT_ZAP_DEPOSIT: constant(address) = 0xA79828DF1850E8a3A3064576f380D90aECDD3359 # init ZAP deposit contract address
 TRUE_BYTES32: constant(bytes32) = 0x0000000000000000000000000000000000000000000000000000000000000001 # conversion True into bytes32
 MAX_SWAP: constant(uint256) = 4 # MAX count of swap steps
+ONE_YEAR: constant(uint256) = 365 * 86400
+LOCK_MAX_TIME: constant(uint256) = 4 * ONE_YEAR
+DENOMINATOR: constant(uint256) = 10000
 
 interface CrvPool:
     def remove_liquidity_one_coin(token_amount: uint256, i: int128, min_amount: uint256): nonpayable
@@ -92,18 +107,30 @@ interface CrvZapDeposit:
 interface CryptoZapDeposit:
     def remove_liquidity_one_coin(_pool: address, token_amount: uint256, i: uint256, min_amount: uint256): nonpayable
 
-interface CrvDeposit:
-    def pool() -> address: view
+interface LiquidityGauge:
+    def deposit(amount: uint256): nonpayable
+    def withdraw(amount: uint256): nonpayable
+
+interface CrvMinter:
+    def mint(gauge_addr: address): nonpayable
 
 interface ERC20:
     def balanceOf(_to: address) -> uint256: view
+    def totalSupply() -> uint256: view
 
 interface WrappedEth:
     def deposit(): payable
     def withdraw(amount: uint256): nonpayable
 
+interface VeCRV:
+    def increase_unlock_time(_unlock_time: uint256): nonpayable
+    def increase_amount(_value: uint256): nonpayable
+    def create_lock(_value: uint256, _unlock_time: uint256): nonpayable
+    def locked(addr: address) -> LockedBalance: view
+    def withdraw(): nonpayable
+
 @external
-def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_deposit: address, _main_pool_coin_count: uint8, _main_lp_token: address, _is_crypto_pool: bool):
+def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_deposit: address, _main_pool_coin_count: uint8, _main_lp_token: address, _main_liquidity_gauge: address, _is_crypto_pool: bool):
     """
     @notice Contract constructor
     @param _name ERC20 standard name
@@ -125,8 +152,11 @@ def __init__(_name: String[64], _symbol: String[32], _main_pool: address, _main_
     self.main_pool_coin_count = _main_pool_coin_count
     assert _main_lp_token != ZERO_ADDRESS, "Wrong Pool"
     self.main_lp_token = _main_lp_token
+    self.main_liquidity_gauge = _main_liquidity_gauge
+    self.management_fee = 200
     self.zap_deposit = INIT_ZAP_DEPOSIT
     self.is_crypto_pool = _is_crypto_pool
+    self.last_management_fee_epoch = convert(block.timestamp, uint40)
 
 # ERC20 common functions
 
@@ -231,6 +261,13 @@ def decreaseAllowance(_spender: address, _value: uint256) -> bool:
     self.allowance[msg.sender][_spender] = allowance
     log Approval(msg.sender, _spender, allowance)
     return True
+
+@internal
+def collect_management_fee():
+    fee_amount: uint256 = (block.timestamp - convert(self.last_management_fee_epoch, uint256)) * convert(self.management_fee, uint256) * self.totalSupply / ONE_YEAR / DENOMINATOR
+    if fee_amount > 0:
+        self._mint(self.admin, fee_amount)
+        self.last_management_fee_epoch = convert(block.timestamp, uint40)
 
 @internal
 def _deposit(main_pool_: address, _main_deposit: address, _main_pool_coin_count: uint8, i: int128, in_token: address, in_amount: uint256):
@@ -407,6 +444,33 @@ def _swap(pool: address, i: int128, j: int128, from_token: address, to_token: ad
         to_amount = ERC20(to_token).balanceOf(self) - to_amount
     return to_amount
 
+@internal
+def ve_deposit(liquidity_gauge: address, _crv_balance: uint256):
+    if _crv_balance == 0:
+        return
+    crv_balance: uint256 = _crv_balance
+    _locked: LockedBalance = VeCRV(VECRV).locked(self)
+    if _locked.amount > 0:
+        if _locked.end <= block.timestamp:
+            VeCRV(VECRV).withdraw()
+            crv_balance = ERC20(CRV).balanceOf(self)
+        elif _locked.end < block.timestamp + LOCK_MAX_TIME:
+            VeCRV(VECRV).increase_unlock_time(block.timestamp + LOCK_MAX_TIME)
+    ve_balance: uint256 = ERC20(VECRV).balanceOf(self)
+    ve_total_supply: uint256 = ERC20(VECRV).totalSupply()
+    gauge_balance: uint256 = ERC20(liquidity_gauge).balanceOf(self)
+    gauge_total_supply: uint256 = ERC20(liquidity_gauge).totalSupply()
+    required_ve_balance: uint256 = gauge_balance * ve_total_supply / gauge_total_supply
+    if ve_balance < required_ve_balance:
+        if crv_balance > required_ve_balance - ve_balance:
+            crv_balance = required_ve_balance - ve_balance
+        if ve_balance > 0:
+            self.safe_approve(CRV, VECRV, crv_balance)
+            VeCRV(VECRV).increase_amount(crv_balance)
+        else:
+            self.safe_approve(CRV, VECRV, crv_balance)
+            VeCRV(VECRV).create_lock(crv_balance, block.timestamp + LOCK_MAX_TIME)
+
 @external
 @payable
 @nonreentrant("lock")
@@ -421,7 +485,12 @@ def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynA
     @return added balance of vault
     """
     assert not self.paused, "Paused"
-    self.safe_transfer_from(token_address, msg.sender, self, amount)
+    if token_address == VETH:
+        assert msg.value >= amount, "Insufficient"
+        if msg.value > amount:
+            send(msg.sender, msg.value - amount)
+    else:
+        self.safe_transfer_from(token_address, msg.sender, self, amount)
     in_token: address = token_address
     in_amount: uint256 = amount
     for route in swap_route:
@@ -429,19 +498,27 @@ def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynA
         if route.swap_pool != ZERO_ADDRESS:
             in_amount = self._swap(route.swap_pool, route.i, route.j, in_token, route.j_token, route.is_underlying, in_amount, route.is_crypto_pool)
             in_token = route.j_token
-    _main_lp_token: address = self.main_lp_token
-    old_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
+    lp_token: address = self.main_lp_token
+    old_balance: uint256 = ERC20(lp_token).balanceOf(self)
     self._deposit(self.main_pool, self.main_deposit, self.main_pool_coin_count, i, in_token, in_amount)
-    new_balance: uint256 = ERC20(_main_lp_token).balanceOf(self)
-    assert new_balance > old_balance, "Deposit failed"
+    new_balance: uint256 = ERC20(lp_token).balanceOf(self)
+    added: uint256 = new_balance - old_balance
+    assert added > 0, "Deposit failed"
     total_supply: uint256 = self.totalSupply
+    _liquidity: uint256 = self.liquidity
     # calculate mint amount as increas LP token amount * totalSupply / old LP balance
     if total_supply > 0:
-        new_balance = (new_balance - old_balance) * total_supply / old_balance
-    assert new_balance >= min_amount, "High Slippage"
-    self._mint(msg.sender, new_balance)
-    log Deposit(token_address, msg.sender, amount, new_balance)
-    return new_balance
+        added = added * total_supply / (old_balance + _liquidity)
+    liquidity_gauge: address = self.main_liquidity_gauge
+    if liquidity_gauge != ZERO_ADDRESS:
+        self.safe_approve(lp_token, liquidity_gauge, new_balance)
+        LiquidityGauge(liquidity_gauge).deposit(new_balance)
+        self.liquidity = _liquidity + new_balance
+    assert added >= min_amount, "High Slippage"
+    self._mint(msg.sender, added)
+    self.collect_management_fee()
+    log Deposit(token_address, msg.sender, amount, added)
+    return added
 
 @internal
 def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int128, out_amount: uint256) -> uint256:
@@ -455,7 +532,11 @@ def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int
     @return withdrawn token amount
     """
     _main_deposit: address = self.main_deposit
-    old_balance: uint256 = ERC20(out_token).balanceOf(self)
+    old_balance: uint256 = 0
+    if out_token == VETH:
+        old_balance = self.balance
+    else:
+        old_balance = ERC20(out_token).balanceOf(self)
     if self.is_crypto_pool:
     # if the pool requires uint256 type indexes
         if _main_deposit == IS_A_POOL_IN_DEPOSIT:
@@ -493,7 +574,10 @@ def _withdraw(lp_token: address, _main_pool: address, out_token: address, i: int
             self.safe_approve(lp_token, _main_deposit, out_amount)
             CrvPool(_main_deposit).remove_liquidity_one_coin(out_amount, i, 1)
     # returns withdrawn token amount
-    return ERC20(out_token).balanceOf(self) - old_balance
+    if out_token == VETH:
+        return self.balance - old_balance
+    else:
+        return ERC20(out_token).balanceOf(self) - old_balance
 
 @external
 @nonreentrant("lock")
@@ -507,9 +591,15 @@ def withdraw(token_address: address, amount: uint256, i: int128, swap_route: Dyn
     @param min_amount minimum amount of withdrawn token from withdraw
     @return withdrawn token amount
     """
+    self.collect_management_fee()
     out_token: address = token_address
     lp_token: address = self.main_lp_token
-    out_amount: uint256 = amount * ERC20(lp_token).balanceOf(self) / self.totalSupply
+    lp_balance: uint256 = ERC20(lp_token).balanceOf(self)
+    _liquidity: uint256 = self.liquidity
+    out_amount: uint256 = amount * (lp_balance + _liquidity) / self.totalSupply
+    if out_amount > lp_balance:
+        LiquidityGauge(self.main_liquidity_gauge).withdraw(out_amount - lp_balance)
+        self.liquidity = _liquidity - out_amount + lp_balance
     _main_pool: address = self.main_pool
     # withdraw token from the curve pool
     out_amount = self._withdraw(lp_token, _main_pool, out_token, i, out_amount)
@@ -530,7 +620,7 @@ def withdraw(token_address: address, amount: uint256, i: int128, swap_route: Dyn
 
 @external
 @nonreentrant('lock')
-def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], new_pool: address, new_deposit: address, new_i: int128, new_pool_coin_count: uint8, new_lp_token: address, new_is_crypto_pool: bool, new_lp_min_amount: uint256):
+def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRoute, MAX_SWAP], new_pool: address, new_deposit: address, new_i: int128, new_pool_coin_count: uint8, new_lp_token: address, new_liquidity_gauge: address, new_is_crypto_pool: bool, new_lp_min_amount: uint256) -> uint256:
     """
     @notice update pool information
     @param _out_token withdraw token address from the old pool
@@ -545,8 +635,22 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
     @param new_lp_min_amount minimum amount of new curve lp token
     """
     assert self.validators[msg.sender], "Not Validator"
+    self.collect_management_fee()
     out_token: address = _out_token
     lp_token: address = self.main_lp_token
+    liquidity_gauge: address = self.main_liquidity_gauge
+    crv_balance: uint256 = 0
+    if liquidity_gauge != ZERO_ADDRESS:
+        old_bal: uint256 = ERC20(CRV).balanceOf(self)
+        CrvMinter(CRV_MINTER).mint(liquidity_gauge)
+        crv_balance = ERC20(CRV).balanceOf(self)
+        _performance_fee: uint256 = convert(self.performance_fee, uint256)
+        if _performance_fee > 0:
+            fee: uint256 = (crv_balance - old_bal) * _performance_fee / DENOMINATOR
+            if fee > 0:
+                self.safe_transfer(CRV, self.admin, fee)
+                crv_balance -= fee
+        LiquidityGauge(liquidity_gauge).withdraw(self.liquidity)
     out_amount: uint256 = ERC20(lp_token).balanceOf(self)
     from_amount: uint256 = out_amount
     _main_pool: address = self.main_pool
@@ -560,20 +664,60 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
     # deposit token into the new pool
     self._deposit(new_pool, new_deposit, new_pool_coin_count, new_i, out_token, out_amount)
     to_amount: uint256 = ERC20(new_lp_token).balanceOf(self)
+    if new_liquidity_gauge != ZERO_ADDRESS:
+        self.safe_approve(new_lp_token, new_liquidity_gauge, to_amount)
+        LiquidityGauge(new_liquidity_gauge).deposit(to_amount)
+        self.liquidity = to_amount
+        self.ve_deposit(new_liquidity_gauge, crv_balance)
+    else:
+        self.liquidity = 0
     assert to_amount >= new_lp_min_amount, "High Slippage"
     # update states
     self.main_pool = new_pool
     self.main_deposit = new_deposit
     self.main_pool_coin_count = new_pool_coin_count
     self.main_lp_token = new_lp_token
+    self.main_liquidity_gauge = new_liquidity_gauge
     self.is_crypto_pool = new_is_crypto_pool
     log Updated(_main_pool, new_pool, block.timestamp, from_amount, to_amount)
+    return to_amount
 
 @external
-def make_fee(amount: uint256):
-# make admin fee to the admin address
-    assert msg.sender == self.admin
-    self._mint(msg.sender, amount)
+def collect_crv_reward(swap_route: DynArray[SwapRoute, MAX_SWAP], i: int128, min_amount: uint256) -> uint256:
+    # make admin fee to the admin address
+    assert self.validators[msg.sender], "Not validator"
+    liquidity_gauge: address = self.main_liquidity_gauge
+    lp_token: address = self.main_lp_token
+    in_amount: uint256 = ERC20(CRV).balanceOf(self)
+    if liquidity_gauge != ZERO_ADDRESS:
+        self.ve_deposit(liquidity_gauge, ERC20(CRV).balanceOf(self))
+        CrvMinter(CRV_MINTER).mint(liquidity_gauge)
+        new_balance: uint256 = ERC20(CRV).balanceOf(self)
+        _performance_fee: uint256 = convert(self.performance_fee, uint256)
+        if _performance_fee > 0:
+            fee: uint256 = (new_balance - in_amount) * _performance_fee / DENOMINATOR
+            in_amount = new_balance - fee
+            if fee > 0:
+                self.safe_transfer(CRV, self.admin, fee)
+        else:
+            in_amount = new_balance
+    in_token: address = CRV
+    if in_amount > 0:
+        for route in swap_route:
+            # swap tokens with swap route
+            if route.swap_pool != ZERO_ADDRESS:
+                in_amount = self._swap(route.swap_pool, route.i, route.j, in_token, route.j_token, route.is_underlying, in_amount, route.is_crypto_pool)
+                in_token = route.j_token
+        self._deposit(self.main_pool, self.main_deposit, self.main_pool_coin_count, i, in_token, in_amount)
+        new_balance: uint256 = ERC20(lp_token).balanceOf(self)
+        assert new_balance > 0, "Deposit failed"
+        if liquidity_gauge != ZERO_ADDRESS:
+            self.safe_approve(lp_token, liquidity_gauge, new_balance)
+            LiquidityGauge(liquidity_gauge).deposit(new_balance)
+            self.liquidity += + new_balance
+        assert new_balance >= min_amount, "High Slippage"
+        return new_balance
+    return 0
 
 @external
 def transfer_admin(_admin: address):
@@ -621,6 +765,16 @@ def set_is_crypto_pool(_new_is_crypto_pool: bool):
 def set_main_lp_token(_new_main_lp_token: address):
     assert msg.sender == self.admin
     self.main_lp_token = _new_main_lp_token
+
+@external
+def set_main_liquidity_gauge(_new_main_liquidity_gauge: address):
+    assert msg.sender == self.admin and self.main_liquidity_gauge == ZERO_ADDRESS
+    lp_token: address = self.main_lp_token
+    amount: uint256 = ERC20(lp_token).balanceOf(self)
+    self.safe_approve(lp_token, _new_main_liquidity_gauge, amount)
+    LiquidityGauge(_new_main_liquidity_gauge).deposit(amount)
+    self.liquidity = amount
+    self.main_liquidity_gauge = _new_main_liquidity_gauge
 
 @external
 def set_zap_deposit(_new_zap_deposit: address):
