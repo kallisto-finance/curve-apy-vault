@@ -87,4 +87,3 @@ jobs:
 
     - name: Run Tests
       run: brownie test
->>>>>>> 543f3562493d96d586c66b89ab0bc6d2dc051c67
