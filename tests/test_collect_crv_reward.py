@@ -15,5 +15,6 @@ def test_collect_crv_reward(Vault, UniswapV3Router, WETH, USDC, USDT, CRV):
     chain = Chain()
     chain.sleep(10)
     chain.mine()
+    bal = Vault.balanceOf(accounts[0]) == 0
     Vault.collect_crv_reward([[CRVETH_INFO[0], WETH, 1, 0, False, True], [TRICRYPTO2_INFO[0], USDT, 2, 0, False, True]], 2, 0, {"from": accounts[0]})
-    assert Vault.balanceOf(accounts[0]) > 0
+    assert Vault.balanceOf(accounts[0]) > bal

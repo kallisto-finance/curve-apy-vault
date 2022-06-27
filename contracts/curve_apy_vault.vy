@@ -30,12 +30,14 @@ event Deposit:
     _from: indexed(address)
     token_amount: uint256
     vault_balance: uint256
+    total_supply: uint256
 
 event Withdraw:
     _token: indexed(address)
     _from: indexed(address)
     token_amount: uint256
     vault_balance: uint256
+    total_supply: uint256
 
 event Updated:
     old_pool: indexed(address)
@@ -43,6 +45,19 @@ event Updated:
     _timestamp: uint256
     from_amount: uint256
     to_amount: uint256
+
+event RewardCollected:
+    crv_collected: uint256
+    added_balance: uint256
+    _timestamp: uint256
+
+event ManagementFeeCollected:
+    fee_amount: uint256
+    _timestamp: uint256
+
+event PerformanceFeeCollected:
+    fee_amount: uint256
+    _timestamp: uint256
 
 # ERC20 standard interfaces
 name: public(String[64])
@@ -268,6 +283,7 @@ def collect_management_fee():
     if fee_amount > 0:
         self._mint(self.admin, fee_amount)
         self.last_management_fee_epoch = convert(block.timestamp, uint40)
+        log ManagementFeeCollected(fee_amount, block.timestamp)
 
 @internal
 def _deposit(main_pool_: address, _main_deposit: address, _main_pool_coin_count: uint8, i: int128, in_token: address, in_amount: uint256):
@@ -517,7 +533,7 @@ def deposit(token_address: address, amount: uint256, i: int128, swap_route: DynA
     assert added >= min_amount, "High Slippage"
     self._mint(msg.sender, added)
     self.collect_management_fee()
-    log Deposit(token_address, msg.sender, amount, added)
+    log Deposit(token_address, msg.sender, amount, added, total_supply + added)
     return added
 
 @internal
@@ -591,12 +607,12 @@ def withdraw(token_address: address, amount: uint256, i: int128, swap_route: Dyn
     @param min_amount minimum amount of withdrawn token from withdraw
     @return withdrawn token amount
     """
-    self.collect_management_fee()
     out_token: address = token_address
     lp_token: address = self.main_lp_token
     lp_balance: uint256 = ERC20(lp_token).balanceOf(self)
     _liquidity: uint256 = self.liquidity
-    out_amount: uint256 = amount * (lp_balance + _liquidity) / self.totalSupply
+    total_supply: uint256 = self.totalSupply
+    out_amount: uint256 = amount * (lp_balance + _liquidity) / total_supply
     if out_amount > lp_balance:
         LiquidityGauge(self.main_liquidity_gauge).withdraw(out_amount - lp_balance)
         self.liquidity = _liquidity - out_amount + lp_balance
@@ -615,7 +631,8 @@ def withdraw(token_address: address, amount: uint256, i: int128, swap_route: Dyn
         send(msg.sender, out_amount)
     else:
         self.safe_transfer(out_token, msg.sender, out_amount)
-    log Withdraw(out_token, msg.sender, out_amount, amount)
+    self.collect_management_fee()
+    log Withdraw(out_token, msg.sender, out_amount, amount, total_supply - amount)
     return out_amount
 
 @external
@@ -650,6 +667,7 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
             if fee > 0:
                 self.safe_transfer(CRV, self.admin, fee)
                 crv_balance -= fee
+                log PerformanceFeeCollected(fee, block.timestamp)
         LiquidityGauge(liquidity_gauge).withdraw(self.liquidity)
     out_amount: uint256 = ERC20(lp_token).balanceOf(self)
     from_amount: uint256 = out_amount
@@ -689,18 +707,20 @@ def collect_crv_reward(swap_route: DynArray[SwapRoute, MAX_SWAP], i: int128, min
     liquidity_gauge: address = self.main_liquidity_gauge
     lp_token: address = self.main_lp_token
     in_amount: uint256 = ERC20(CRV).balanceOf(self)
+    crv_collected: uint256 = 0
     if liquidity_gauge != ZERO_ADDRESS:
         self.ve_deposit(liquidity_gauge, ERC20(CRV).balanceOf(self))
         CrvMinter(CRV_MINTER).mint(liquidity_gauge)
-        new_balance: uint256 = ERC20(CRV).balanceOf(self)
+        crv_collected = ERC20(CRV).balanceOf(self)
         _performance_fee: uint256 = convert(self.performance_fee, uint256)
         if _performance_fee > 0:
-            fee: uint256 = (new_balance - in_amount) * _performance_fee / DENOMINATOR
-            in_amount = new_balance - fee
+            fee: uint256 = (crv_collected - in_amount) * _performance_fee / DENOMINATOR
+            in_amount = crv_collected - fee
             if fee > 0:
                 self.safe_transfer(CRV, self.admin, fee)
+                log PerformanceFeeCollected(fee, block.timestamp)
         else:
-            in_amount = new_balance
+            in_amount = crv_collected
     in_token: address = CRV
     if in_amount > 0:
         for route in swap_route:
@@ -716,6 +736,7 @@ def collect_crv_reward(swap_route: DynArray[SwapRoute, MAX_SWAP], i: int128, min
             LiquidityGauge(liquidity_gauge).deposit(new_balance)
             self.liquidity += + new_balance
         assert new_balance >= min_amount, "High Slippage"
+        log RewardCollected(crv_collected, new_balance, block.timestamp)
         return new_balance
     return 0
 
@@ -780,6 +801,16 @@ def set_main_liquidity_gauge(_new_main_liquidity_gauge: address):
 def set_zap_deposit(_new_zap_deposit: address):
     assert msg.sender == self.admin
     self.zap_deposit = _new_zap_deposit
+
+@external
+def set_management_fee(_management_fee: uint16):
+    assert msg.sender == self.admin
+    self.management_fee = _management_fee
+
+@external
+def set_performance_fee(_performance_fee: uint16):
+    assert msg.sender == self.admin
+    self.performance_fee = _performance_fee
 
 @external
 def pause(_paused: bool):
