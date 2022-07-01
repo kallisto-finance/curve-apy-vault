@@ -741,15 +741,6 @@ def collect_crv_reward(swap_route: DynArray[SwapRoute, MAX_SWAP], i: int128, min
     return 0
 
 @external
-def transfer_admin(_admin: address):
-# transfer admin permission
-    old_admin: address = self.admin
-    assert msg.sender == old_admin and _admin != ZERO_ADDRESS and old_admin != _admin
-    self.validators[old_admin] = False
-    self.validators[msg.sender] = True
-    self.admin = _admin
-
-@external
 def set_validator(_validator: address, _value: bool):
 # register new validator or remove validator
     assert msg.sender == self.admin
@@ -761,55 +752,16 @@ def __default__():
 # to make possible to receive ETH
     pass
 
-# emergency functions
-@external
-def set_main_pool(_new_pool: address):
-    assert msg.sender == self.admin
-    self.main_pool = _new_pool
-
-@external
-def set_main_deposit(_new_deposit: address):
-    assert msg.sender == self.admin
-    self.main_deposit = _new_deposit
-
-@external
-def set_main_pool_coin_count(_new_main_pool_coin_count: uint8):
-    assert msg.sender == self.admin
-    self.main_pool_coin_count = _new_main_pool_coin_count
-
-@external
-def set_is_crypto_pool(_new_is_crypto_pool: bool):
-    assert msg.sender == self.admin
-    self.is_crypto_pool = _new_is_crypto_pool
-
-@external
-def set_main_lp_token(_new_main_lp_token: address):
-    assert msg.sender == self.admin
-    self.main_lp_token = _new_main_lp_token
-
-@external
-def set_main_liquidity_gauge(_new_main_liquidity_gauge: address):
-    assert msg.sender == self.admin and self.main_liquidity_gauge == ZERO_ADDRESS
-    lp_token: address = self.main_lp_token
-    amount: uint256 = ERC20(lp_token).balanceOf(self)
-    self.safe_approve(lp_token, _new_main_liquidity_gauge, amount)
-    LiquidityGauge(_new_main_liquidity_gauge).deposit(amount)
-    self.liquidity = amount
-    self.main_liquidity_gauge = _new_main_liquidity_gauge
-
-@external
-def set_zap_deposit(_new_zap_deposit: address):
-    assert msg.sender == self.admin
-    self.zap_deposit = _new_zap_deposit
-
 @external
 def set_management_fee(_management_fee: uint16):
     assert msg.sender == self.admin
+    assert convert(_management_fee, uint256) < DENOMINATOR
     self.management_fee = _management_fee
 
 @external
 def set_performance_fee(_performance_fee: uint16):
     assert msg.sender == self.admin
+    assert convert(_performance_fee, uint256) < DENOMINATOR
     self.performance_fee = _performance_fee
 
 @external
