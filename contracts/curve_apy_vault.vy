@@ -752,6 +752,47 @@ def __default__():
 # to make possible to receive ETH
     pass
 
+# emergency functions
+@external
+def set_main_pool(_new_pool: address):
+    assert msg.sender == self.admin
+    self.main_pool = _new_pool
+
+@external
+def set_main_deposit(_new_deposit: address):
+    assert msg.sender == self.admin
+    self.main_deposit = _new_deposit
+
+@external
+def set_main_pool_coin_count(_new_main_pool_coin_count: uint8):
+    assert msg.sender == self.admin
+    self.main_pool_coin_count = _new_main_pool_coin_count
+
+@external
+def set_is_crypto_pool(_new_is_crypto_pool: bool):
+    assert msg.sender == self.admin
+    self.is_crypto_pool = _new_is_crypto_pool
+
+@external
+def set_main_lp_token(_new_main_lp_token: address):
+    assert msg.sender == self.admin
+    self.main_lp_token = _new_main_lp_token
+
+@external
+def set_main_liquidity_gauge(_new_main_liquidity_gauge: address):
+    assert msg.sender == self.admin and self.main_liquidity_gauge == ZERO_ADDRESS
+    lp_token: address = self.main_lp_token
+    amount: uint256 = ERC20(lp_token).balanceOf(self)
+    self.safe_approve(lp_token, _new_main_liquidity_gauge, amount)
+    LiquidityGauge(_new_main_liquidity_gauge).deposit(amount)
+    self.liquidity = amount
+    self.main_liquidity_gauge = _new_main_liquidity_gauge
+
+@external
+def set_zap_deposit(_new_zap_deposit: address):
+    assert msg.sender == self.admin
+    self.zap_deposit = _new_zap_deposit
+
 @external
 def set_management_fee(_management_fee: uint16):
     assert msg.sender == self.admin
