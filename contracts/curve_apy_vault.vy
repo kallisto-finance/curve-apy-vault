@@ -650,6 +650,7 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
     @param new_lp_token curve LP token address of the new main pool
     @param new_is_crypto_pool true if new main pool coin index type is uint256
     @param new_lp_min_amount minimum amount of new curve lp token
+    @return new curve lp token
     """
     assert self.validators[msg.sender], "Not Validator"
     self.collect_management_fee()
@@ -702,6 +703,13 @@ def update_pool(_out_token: address, old_i: int128, swap_route: DynArray[SwapRou
 
 @external
 def collect_crv_reward(swap_route: DynArray[SwapRoute, MAX_SWAP], i: int128, min_amount: uint256) -> uint256:
+    """
+    @notice Collect CRV reward and readd liquidity
+    @param swap_route token swap route from withdrawing to depositing into the new pool
+    @param i deposit token index of main pool
+    @param min_amount minimum amount of curve lp token
+    @return added curve lp token
+    """
     # make admin fee to the admin address
     assert self.validators[msg.sender], "Not validator"
     liquidity_gauge: address = self.main_liquidity_gauge

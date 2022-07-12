@@ -47,20 +47,15 @@ Switch Kallisto vault position from current Curve pool to new best Curve pool
 | new_is_crypto_pool | bool | True if new main pool coin index type is uint256 |
 | new_lp_min_amount | uint256 | minimum amount of new curve lp token |
 
-#### make_fee
+#### collect_crv_reward
 
-Apply performance fee on vault earnings
-
-| Key | Type | Description |
-| --- | --- | --- |
-| amount | uint256 | Fee amount|
-
-#### transfer_admin
-
-Transfer Contract Admin rights
+Collect CRV reward and swap into liquidity
 
 | Key | Type | Description |
 | --- | --- | --- |
+| swap_route | SwapRoute[] | best swap route on Curve |
+| i | int128 | token index of the main pool |
+| min_amount | uint256 | minimum amount of lp token |
 
 #### Emergency Functions
 
