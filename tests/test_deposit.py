@@ -16,7 +16,7 @@ def test_simple_eth_deposit(Vault, UniswapV3Router, WETH, USDC, USDT):
     USDC.approve(Vault, 1000 * 10**6, {"from": accounts[0]})
     min_amount = 1
     Vault.deposit(USDC, 1000 * 10**6, 1, [], min_amount, {"from": accounts[0]})
-    Vault.update_pool(USDT, 2, [], TRICRYPTO2_INFO[0], TRICRYPTO2_INFO[1], 0, 3, TRICRYPTO2_INFO[2], TRICRYPTO2_INFO[3], True, 0, {"from": accounts[0]})
+    Vault.update_pool(USDT, 2, [], TRICRYPTO2_INFO[0], TRICRYPTO2_INFO[1], 0, 3, TRICRYPTO2_INFO[2], TRICRYPTO2_INFO[3], True, 0, 2**256 - 1, {"from": accounts[0]})
     Vault.deposit(VETH, 10**18, 2, [], min_amount, {"from": accounts[0], "value": 10**18})
     assert Vault.balanceOf(accounts[0]) > 0
 
