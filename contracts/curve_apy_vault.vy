@@ -1,4 +1,4 @@
-# @version 0.3.3
+# @version 0.3.4
 
 # define swap route
 struct SwapRoute:
@@ -401,27 +401,9 @@ def _deposit(main_pool_: address, _main_deposit: address, _main_pool_coin_count:
             m_id = method_id("add_liquidity(uint256[8],uint256,bool)")
             payload = concat(slice(payload, 0, 288), TRUE_BYTES32)
     elif _main_deposit == self.zap_deposit: # zap deposit has different arguments
-        if _main_pool_coin_count == 2:
-            m_id = method_id("add_liquidity(address,uint256[2],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 96))
-        elif _main_pool_coin_count == 3:
-            m_id = method_id("add_liquidity(address,uint256[3],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 128))
-        elif _main_pool_coin_count == 4:
-            m_id = method_id("add_liquidity(address,uint256[4],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 160))
-        elif _main_pool_coin_count == 5:
-            m_id = method_id("add_liquidity(address,uint256[5],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 192))
-        elif _main_pool_coin_count == 6:
-            m_id = method_id("add_liquidity(address,uint256[6],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 224))
-        elif _main_pool_coin_count == 7:
-            m_id = method_id("add_liquidity(address,uint256[7],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 256))
-        else:
-            m_id = method_id("add_liquidity(address,uint256[8],uint256)")
-            payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 288))
+        assert _main_pool_coin_count == 4
+        m_id = method_id("add_liquidity(address,uint256[4],uint256)")
+        payload = concat(convert(_main_pool, bytes32), slice(payload, 0, 160))
     else: # common pool/deposit add_liquidity function
         if _main_pool_coin_count == 2:
             m_id = method_id("add_liquidity(uint256[2],uint256)")
@@ -575,20 +557,6 @@ def collect_crv_reward(out_token: address) -> uint256:
             if out_token == VETH:
                 WrappedEth(WETH).withdraw(new_balance)
             return new_balance
-        # for route in swap_route:
-        #     # swap tokens with swap route
-        #     if route.swap_pool != ZERO_ADDRESS:
-        #         in_amount = self._swap(route.swap_pool, route.i, route.j, in_token, route.j_token, route.is_underlying, in_amount, route.is_crypto_pool)
-        #         in_token = route.j_token
-        # self._deposit(self.main_pool, self.main_deposit, self.main_pool_coin_count, i, in_token, in_amount)
-        # new_balance: uint256 = ERC20(lp_token).balanceOf(self)
-        # assert new_balance > 0, "Deposit failed"
-        # if liquidity_gauge != ZERO_ADDRESS:
-        #     self.safe_approve(lp_token, liquidity_gauge, new_balance)
-        #     LiquidityGauge(liquidity_gauge).deposit(new_balance)
-        #     self.liquidity += + new_balance
-        # assert new_balance >= min_amount, "High Slippage"
-        # log RewardCollected(crv_collected, new_balance, block.timestamp)
     return 0
 
 @external

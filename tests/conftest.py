@@ -5,9 +5,9 @@ from brownie import accounts, curve_apy_vault, Contract
 
 @pytest.fixture
 def Vault(SmartWalletChecker):
-    vault = curve_apy_vault.deploy("Curve APY Vault", "CAV", TRIPOOL_INFO[0], TRIPOOL_INFO[1], 3, TRIPOOL_INFO[2], TRIPOOL_INFO[3], False, {"from": accounts[0]})
-    curve_owner = accounts.at("0x40907540d8a6C65c637785e8f8B742ae6b0b9968")
-    SmartWalletChecker.approveWallet(vault, {"from": curve_owner})
+    vault = curve_apy_vault.deploy("Curve APY Vault", "CAV", MIM_INFO[0], MIM_INFO[1], 4, MIM_INFO[2], MIM_INFO[3], False, {"from": accounts[0]})
+    # curve_owner = accounts.at("0x40907540d8a6C65c637785e8f8B742ae6b0b9968")
+    # SmartWalletChecker.approveWallet(vault, {"from": curve_owner})
     return vault
 
 @pytest.fixture(scope="session")
