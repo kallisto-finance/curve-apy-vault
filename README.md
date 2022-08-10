@@ -44,6 +44,7 @@ Switch Kallisto vault position from current Curve pool to new best Curve pool
 | new_i | int128 | deposit token index of new Curve Pool |
 | new_pool_coin_count | uint8 | coin count of new Curve Pool |
 | new_lp_token | address | Address of new Curve LP token |
+| new_liquidity_gauge | address | Address of new Liquidity Gauge for Curve LP token |
 | new_is_crypto_pool | bool | True if new main pool coin index type is uint256 |
 | new_lp_min_amount | uint256 | minimum amount of new curve lp token |
 
